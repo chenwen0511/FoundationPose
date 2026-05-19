@@ -7,7 +7,7 @@ FoundationPose HTTP 服务：/infer 接收 rgb、depth、camera 三个 multipart
 
     export FOUNDATIONPOSE_MESH_FILE=test/CAD/tray_180mm_centered_mesh_v2.ply
     export FOUNDATIONPOSE_MESH_SCALE=0.001
-    export GENPOSE2_SAM3_PROMPT="white plate"
+    export GENPOSE2_SAM3_PROMPT="Plastic Reel"
     export GENPOSE2_SAM3_ROOT=/path/to/sam3
     python http_server.py --host 0.0.0.0 --port 8002
 """
@@ -55,7 +55,7 @@ from sam3_seg import (
 
 DEFAULT_OUTPUT_ROOT = ROOT_DIR / "service_outputs"
 DEFAULT_MESH_FILE = ROOT_DIR / "test/CAD/tray_180mm_centered_mesh_v2.ply"
-DEFAULT_SAM3_PROMPT = "white plate"
+DEFAULT_SAM3_PROMPT = "Plastic Reel"
 DEFAULT_MESH_SCALE = 0.001
 
 _POSE_COLORS_RGB: tuple[tuple[int, int, int], ...] = (

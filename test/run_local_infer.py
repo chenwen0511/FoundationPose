@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SAMPLE = ROOT / "test/20260507_105248_1d1db1bb/inputs"
 DEFAULT_MESH = ROOT / "test/CAD/tray_180mm_centered_mesh_v2.ply"
 DEFAULT_MESH_SCALE = 0.001
-DEFAULT_SAM3_PROMPT = "white plate"
+DEFAULT_SAM3_PROMPT = "Plastic Reel"
 
 
 def main() -> int:
