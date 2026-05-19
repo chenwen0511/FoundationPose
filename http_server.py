@@ -57,6 +57,8 @@ DEFAULT_OUTPUT_ROOT = ROOT_DIR / "service_outputs"
 DEFAULT_MESH_FILE = ROOT_DIR / "test/CAD/tray_180mm_centered_mesh_v2.ply"
 DEFAULT_SAM3_PROMPT = "Plastic Reel"
 DEFAULT_MESH_SCALE = 0.001
+DEFAULT_SEG_SCORE_MIN = 0.6
+DEFAULT_POSE_REPROJ_MAX_PX = 40.0
 
 _POSE_COLORS_RGB: tuple[tuple[int, int, int], ...] = (
     (0, 255, 0),
@@ -117,6 +119,16 @@ def _est_refine_iter() -> int:
 def _mesh_scale() -> float:
     """CAD 顶点单位到米的缩放，例如 mm 模型设 ``0.001``。"""
     return float(os.environ.get("FOUNDATIONPOSE_MESH_SCALE", str(DEFAULT_MESH_SCALE)))
+
+
+def _seg_score_min() -> float:
+    """仅对 SAM3 分割 score >= 该阈值的实例做位姿估计。"""
+    return float(os.environ.get("FOUNDATIONPOSE_SEG_SCORE_MIN", str(DEFAULT_SEG_SCORE_MIN)))
+
+
+def _pose_reproj_max_px() -> float:
+    """位姿平移重投影与 mask 中心的最大允许偏差（像素）。"""
+    return float(os.environ.get("FOUNDATIONPOSE_POSE_REPROJ_MAX_PX", str(DEFAULT_POSE_REPROJ_MAX_PX)))
 
 
 async def _save_upload(upload: UploadFile, path: Path) -> None:
@@ -186,6 +198,63 @@ def _pose_4x4_to_t_and_R(pose_4x4: np.ndarray) -> tuple[List[float], List[List[f
     return t_m, rot
 
 
+def _guess_translation_from_mask(mask: np.ndarray, depth: np.ndarray, K: np.ndarray) -> np.ndarray:
+    """与 ``FoundationPose.guess_translation`` 一致：mask 中心 + 深度中值。"""
+    vs, us = np.where(mask > 0)
+    if len(us) == 0:
+        return np.zeros(3, dtype=np.float64)
+    uc = (us.min() + us.max()) / 2.0
+    vc = (vs.min() + vs.max()) / 2.0
+    valid = mask.astype(bool) & (depth >= 0.001)
+    if not valid.any():
+        return np.zeros(3, dtype=np.float64)
+    zc = float(np.median(depth[valid]))
+    center = (np.linalg.inv(K) @ np.asarray([uc, vc, 1.0]).reshape(3, 1)) * zc
+    return center.reshape(3).astype(np.float64)
+
+
+def _project_point(t_m: np.ndarray, K: np.ndarray) -> tuple[float, float]:
+    x, y, z = float(t_m[0]), float(t_m[1]), float(t_m[2])
+    if z <= 1e-6:
+        return float("nan"), float("nan")
+    u = float(K[0, 0] * x / z + K[0, 2])
+    v = float(K[1, 1] * y / z + K[1, 2])
+    return u, v
+
+
+def _mask_centroid_uv(mask: np.ndarray) -> tuple[float, float]:
+    vs, us = np.where(mask > 0)
+    if len(us) == 0:
+        return float("nan"), float("nan")
+    return float((us.min() + us.max()) / 2.0), float((vs.min() + vs.max()) / 2.0)
+
+
+def _pose_mask_reproj_error_px(pose: np.ndarray, mask: np.ndarray, K: np.ndarray) -> float:
+    mu, mv = _mask_centroid_uv(mask)
+    pu, pv = _project_point(pose[:3, 3], K)
+    if not np.isfinite(mu) or not np.isfinite(pu):
+        return float("inf")
+    return float(math.hypot(pu - mu, pv - mv))
+
+
+def _correct_pose_translation_from_mask(
+    pose: np.ndarray,
+    mask: np.ndarray,
+    depth: np.ndarray,
+    K: np.ndarray,
+    *,
+    max_px: float,
+) -> tuple[np.ndarray, float, bool]:
+    """若位姿平移重投影偏离 mask 中心过大，用 mask 中心深度修正平移（保留旋转）。"""
+    err_before = _pose_mask_reproj_error_px(pose, mask, K)
+    if err_before <= max_px:
+        return pose, err_before, False
+    pose_out = pose.copy()
+    pose_out[:3, 3] = _guess_translation_from_mask(mask, depth, K)
+    err_after = _pose_mask_reproj_error_px(pose_out, mask, K)
+    return pose_out, err_after, True
+
+
 def _visualize_poses(
     rgb: np.ndarray,
     K: np.ndarray,
@@ -194,13 +263,14 @@ def _visualize_poses(
     *,
     bbox: np.ndarray,
     to_origin_inv: np.ndarray,
+    instance_masks: Optional[List[np.ndarray]] = None,
 ) -> np.ndarray:
     from Utils import draw_posed_3d_box, draw_xyz_axis
 
     vis = rgb.copy()
     axis_scale = float(os.environ.get("FOUNDATIONPOSE_AXIS_SCALE", "0.1"))
     for idx, (inst_id, pose) in enumerate(zip(instance_ids, poses)):
-        color = _POSE_COLORS_RGB[idx % len(_POSE_COLORS_RGB)]
+        color = _POSE_COLORS_RGB[(inst_id - 1) % len(_POSE_COLORS_RGB)]
         center_pose = pose @ to_origin_inv
         vis = draw_posed_3d_box(
             K,
@@ -219,11 +289,27 @@ def _visualize_poses(
             transparency=0,
             is_input_rgb=True,
         )
-        # 在 mask 区域附近标注 instance id（简单放在图像顶部）
+        label = f"id={inst_id}"
+        if instance_masks is not None and idx < len(instance_masks):
+            ys, xs = np.where(instance_masks[idx])
+            if len(xs):
+                lx = int(np.clip(xs.mean(), 0, vis.shape[1] - 1))
+                ly = max(0, int(ys.min()) - 8)
+                cv2.putText(
+                    vis,
+                    label,
+                    (lx, ly),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.55,
+                    (color[2], color[1], color[0]),
+                    2,
+                    cv2.LINE_AA,
+                )
+                continue
         cv2.putText(
             vis,
-            f"id={inst_id}",
-            (10, 28 + idx * 28),
+            label,
+            (10, 28 + (inst_id - 1) * 28),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.8,
             (color[2], color[1], color[0]),
@@ -371,12 +457,24 @@ def _run_foundationpose_pipeline(
     refine_iter = _est_refine_iter()
 
     detections: List[Dict[str, Any]] = []
+    skipped_low_seg: List[Dict[str, Any]] = []
     pose_mats: List[np.ndarray] = []
+    pose_masks: List[np.ndarray] = []
     pose_instance_ids: List[int] = []
+    seg_min = _seg_score_min()
+    reproj_max_px = _pose_reproj_max_px()
 
     t0 = time.perf_counter()
     for idx, det in enumerate(sam3_result.instance_dets):
         inst_id = idx + 1
+        seg_score = float(
+            sam3_result.instance_scores[idx] if sam3_result.instance_scores else det.get("score", 0.0)
+        )
+        if seg_score < seg_min:
+            print(f"[http_server] skip instance id={inst_id}: seg_score={seg_score:.4f} < {seg_min}")
+            skipped_low_seg.append({"instance_id": inst_id, "seg_score": seg_score, "bbox": det.get("bbox")})
+            continue
+
         ob_mask = get_instance_bool_masks([det], (w, h))[0]
         if int(ob_mask.sum()) < 4:
             print(f"[http_server] skip instance id={inst_id}: mask too small")
@@ -391,6 +489,20 @@ def _run_foundationpose_pipeline(
             iteration=refine_iter,
         )
         pose = np.asarray(pose, dtype=np.float64).reshape(4, 4)
+        reproj_before = _pose_mask_reproj_error_px(pose, ob_mask, K)
+        pose, reproj_after, pose_corrected = _correct_pose_translation_from_mask(
+            pose,
+            ob_mask,
+            depth_i,
+            K,
+            max_px=reproj_max_px,
+        )
+        if pose_corrected:
+            print(
+                f"[http_server] correct instance id={inst_id} translation: "
+                f"reproj {reproj_before:.1f}px -> {reproj_after:.1f}px"
+            )
+
         t_m, rot = _pose_4x4_to_t_and_R(pose)
         t_mm = (np.asarray(t_m) * 1000.0).tolist()
         euler_zyx_rad = _rotation_matrix_to_euler_zyx(rot)
@@ -400,8 +512,11 @@ def _run_foundationpose_pipeline(
 
         entry: Dict[str, Any] = {
             "instance_id": inst_id,
-            "seg_score": float(sam3_result.instance_scores[idx]) if sam3_result.instance_scores else float(det.get("score", 0.0)),
+            "seg_score": seg_score,
             "pose_score": fp_score,
+            "pose_corrected": pose_corrected,
+            "reproj_error_px": reproj_after,
+            "reproj_error_before_px": reproj_before,
             "bbox": det.get("bbox"),
             "pose_4x4": pose.reshape(4, 4).tolist(),
             "t_m": t_m,
@@ -412,6 +527,7 @@ def _run_foundationpose_pipeline(
         }
         detections.append(entry)
         pose_mats.append(pose)
+        pose_masks.append(ob_mask)
         pose_instance_ids.append(inst_id)
 
         pose_txt = results_dir / f"pose_inst{inst_id:02d}.txt"
@@ -421,7 +537,10 @@ def _run_foundationpose_pipeline(
     timing["pose_s"] = time.perf_counter() - t0
 
     if not detections:
-        raise RuntimeError("FoundationPose returned no valid poses (all masks too small?)")
+        raise RuntimeError(
+            f"FoundationPose returned no valid poses "
+            f"(seg_score_min={seg_min}, skipped_low_seg={len(skipped_low_seg)})"
+        )
 
     t0 = time.perf_counter()
     vis_pose_rgb = _visualize_poses(
@@ -431,6 +550,7 @@ def _run_foundationpose_pipeline(
         pose_instance_ids,
         bbox=bbox,
         to_origin_inv=to_origin_inv,
+        instance_masks=pose_masks,
     )
     cv2.imwrite(str(vis_pose_path), cv2.cvtColor(vis_pose_rgb, cv2.COLOR_RGB2BGR))
     timing["vis_s"] = time.perf_counter() - t0
@@ -445,6 +565,9 @@ def _run_foundationpose_pipeline(
     payload: Dict[str, Any] = {
         "num_instances": len(detections),
         "seg_num_instances": sam3_result.num_instances,
+        "seg_score_min": seg_min,
+        "pose_reproj_max_px": reproj_max_px,
+        "skipped_low_seg": skipped_low_seg,
         "score": float(best["seg_score"]),
         "pose_score": best.get("pose_score"),
         "xyz_mm": best["t_mm"],
@@ -518,6 +641,8 @@ def health() -> Dict[str, Any]:
         "mesh_file_resolved": mesh_resolved,
         "mesh_file_exists": mesh_exists,
         "mesh_scale": _mesh_scale(),
+        "seg_score_min": _seg_score_min(),
+        "pose_reproj_max_px": _pose_reproj_max_px(),
         "est_refine_iter": _est_refine_iter(),
         "sam3_root": str(_sam3_root()),
         "sam3_python": _sam3_python(),
