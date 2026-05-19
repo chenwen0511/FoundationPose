@@ -39,5 +39,9 @@ psutil
 tqdm
 warp-lang
 
-# Optional: faster / utility (import guarded in code)
-scikit-image
+# HTTP service (optional)
+fastapi
+uvicorn
+python-multipart
+pycocotools
+requests
