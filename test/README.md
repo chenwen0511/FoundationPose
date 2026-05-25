@@ -76,3 +76,204 @@ python test/run_20260522_121946.py            # 等价于 bash 脚本 local 模�
 - `vis_sam3_seg.png` — 筛选后实例 mask 叠加
 - `vis_pose.png` — 3D 框 + 坐标轴
 - `detection_pose.json` — 位姿列表
+
+## http 调用
+```
+(base) ubuntu@ubuntu-System-Product-Name:~$ curl -X POST http://127.0.0.1:8002/infer   -F "rgb=@/home/ubuntu/stephen/01-code/FoundationPose/test/20260507_105248_1d1db1bb/inputs/rgb.png;type=image/png"   -F "depth=@/home/ubuntu/stephen/01-code/FoundationPose/test/20260507_105248_1d1db1bb/inputs/depth.png;type=image/png"   -F "camera=@/home/ubuntu/stephen/01-code/FoundationPose/test/20260507_105248_1d1db1bb/inputs/camera.json;type=application/json" | python -m "json.tool"
+```
+
+```
+
+  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                 Dload  Upload   Total   Spent    Left  Speed
+100  680k  100  3584  100  676k    390  75506  0:00:09  0:00:09 --:--:--   902
+{
+    "num_instances": 1,
+    "seg_num_instances": 1,
+    "seg_num_instances_raw": 6,
+    "seg_score_min": 0.6,
+    "pose_reproj_max_px": 40.0,
+    "skipped_low_seg": [],
+    "score": 0.796875,
+    "pose_score": 105.66796875,
+    "xyz_mm": [
+        -53.77276950756606,
+        2.931274253168315,
+        323.0000138282776
+    ],
+    "rotation_euler_zyx_rad": [
+        2.78175333027043,
+        0.8686851987977124,
+        1.1987914503922514
+    ],
+    "rotation_order": "zyx",
+    "pose_convention": "xyz is camera-frame translation in mm; rx, ry, rz are ZYX Euler angles in radians.",
+    "xyzrxryrz": [
+        -53.77276950756606,
+        2.931274253168315,
+        323.0000138282776,
+        2.78175333027043,
+        0.8686851987977124,
+        1.1987914503922514
+    ],
+    "xyzrxryrz_unit": "mm_rad",
+    "pose_4x4": [
+        [
+            0.23474913835525513,
+            0.9696536064147949,
+            0.06829948723316193,
+            -0.053772769507566064
+        ],
+        [
+            0.6016563773155212,
+            -0.08975300937891006,
+            -0.793696403503418,
+            0.002931274253168315
+        ],
+        [
+            -0.7634804248809814,
+            0.22741246223449707,
+            -0.6044676303863525,
+            0.3230000138282776
+        ],
+        [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+        ]
+    ],
+    "mesh_file": "/home/ubuntu/stephen/01-code/FoundationPose/test/CAD/tray_180mm_centered_mesh_v2.ply",
+    "result_dir": "/home/ubuntu/stephen/01-code/FoundationPose/service_outputs/20260525_143152_65e77a3e",
+    "detection_ism_path": "/home/ubuntu/stephen/01-code/FoundationPose/service_outputs/20260525_143152_65e77a3e/results/detection_ism.json",
+    "detection_pose_path": "/home/ubuntu/stephen/01-code/FoundationPose/service_outputs/20260525_143152_65e77a3e/results/detection_pose.json",
+    "vis_ism_path": "/home/ubuntu/stephen/01-code/FoundationPose/service_outputs/20260525_143152_65e77a3e/results/vis_ism.png",
+    "vis_pose_path": "/home/ubuntu/stephen/01-code/FoundationPose/service_outputs/20260525_143152_65e77a3e/results/vis_pose.png",
+    "vis_sam3_seg_path": "/home/ubuntu/stephen/01-code/FoundationPose/service_outputs/20260525_143152_65e77a3e/results/vis_sam3_seg.png",
+    "vlm_roi_json_path": "/home/ubuntu/stephen/01-code/FoundationPose/service_outputs/20260525_143152_65e77a3e/results/vlm_roi.json",
+    "vlm": {
+        "use_vlm_roi_filter": true,
+        "pipeline": "sam3+vlm_roi_filter",
+        "vlm_used": true,
+        "vlm_bbox": [
+            249,
+            139,
+            277,
+            355
+        ],
+        "vlm_bbox_used": [
+            239,
+            129,
+            287,
+            365
+        ],
+        "vlm_label": "white_tray_above_blue_dot",
+        "kept_instance_ids": [
+            1
+        ],
+        "source_instance_indices": [
+            6
+        ],
+        "intersection_pixels": {
+            "1": 3225
+        },
+        "sam3_raw_num_instances": 6
+    },
+    "detections": [
+        {
+            "instance_id": 1,
+            "seg_score": 0.796875,
+            "pose_score": 105.66796875,
+            "pose_corrected": true,
+            "reproj_error_px": 0.0,
+            "reproj_error_before_px": 68.12540720995742,
+            "bbox": [
+                245,
+                143,
+                25,
+                208
+            ],
+            "pose_4x4": [
+                [
+                    0.23474913835525513,
+                    0.9696536064147949,
+                    0.06829948723316193,
+                    -0.053772769507566064
+                ],
+                [
+                    0.6016563773155212,
+                    -0.08975300937891006,
+                    -0.793696403503418,
+                    0.002931274253168315
+                ],
+                [
+                    -0.7634804248809814,
+                    0.22741246223449707,
+                    -0.6044676303863525,
+                    0.3230000138282776
+                ],
+                [
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0
+                ]
+            ],
+            "t_m": [
+                -0.053772769507566064,
+                0.002931274253168315,
+                0.3230000138282776
+            ],
+            "t_mm": [
+                -53.77276950756606,
+                2.931274253168315,
+                323.0000138282776
+            ],
+            "R": [
+                [
+                    0.23474913835525513,
+                    0.9696536064147949,
+                    0.06829948723316193
+                ],
+                [
+                    0.6016563773155212,
+                    -0.08975300937891006,
+                    -0.793696403503418
+                ],
+                [
+                    -0.7634804248809814,
+                    0.22741246223449707,
+                    -0.6044676303863525
+                ]
+            ],
+            "rotation_euler_zyx_rad": [
+                2.78175333027043,
+                0.8686851987977124,
+                1.1987914503922514
+            ],
+            "xyzrxryrz": [
+                -53.77276950756606,
+                2.931274253168315,
+                323.0000138282776,
+                2.78175333027043,
+                0.8686851987977124,
+                1.1987914503922514
+            ],
+            "pose_path": "/home/ubuntu/stephen/01-code/FoundationPose/service_outputs/20260525_143152_65e77a3e/results/pose_inst01.txt"
+        }
+    ],
+    "timing": {
+        "seg_s": 7.120478913886473,
+        "sam3_s": 7.120478913886473,
+        "vlm_s": 1.126387930009514,
+        "instance_filter_s": 0.029934188118204474,
+        "pose_s": 0.7681358670815825,
+        "vis_s": 0.02805963298305869,
+        "pipeline_s": 9.072996532078832,
+        "upload_s": 0.00042235804721713066,
+        "total_s": 9.07341889012605
+    },
+    "sam3_prompt": "Plastic Reel"
+}
+
+```
