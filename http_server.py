@@ -1,7 +1,7 @@
 """
 FoundationPose HTTP 服务：/infer 接收 rgb、depth、camera 三个 multipart 文件。
 
-流程：可选 VLM ROI + 白底图（``seg/vlm_seg.py``）→ YOLO/SAM3 实例分割 → FoundationPose ``register()`` → 可视化。
+流程：可选 VLM ROI 筛选（``seg/vlm_seg.py``）→ 原图 SAM3 实例分割 → FoundationPose ``register()`` → 可视化。
 
 启动示例（白盘测试样例）::
 
@@ -52,7 +52,7 @@ from seg.sam3_seg import (
     visualize_sam3_ism,
     visualize_sam3_mask_exr,
 )
-from seg.vlm_seg import run_vlm_sam3_segmentation, seg_backend, use_vlm_roi
+from seg.vlm_seg import run_vlm_sam3_filter_pipeline, use_vlm_roi_filter
 
 DEFAULT_OUTPUT_ROOT = ROOT_DIR / "service_outputs"
 DEFAULT_MESH_FILE = ROOT_DIR / "test/CAD/tray_180mm_centered_mesh_v2.ply"
@@ -85,10 +85,9 @@ _fp_holder: Dict[str, Any] = {
 
 class InferTiming(TypedDict, total=False):
     vlm_s: float
-    vlm_mask_s: float
+    instance_filter_s: float
     seg_s: float
     sam3_s: float
-    yolo_s: float
     pose_s: float
     vis_s: float
     pipeline_s: float
@@ -416,17 +415,21 @@ def _run_foundationpose_pipeline(
     )
 
     vlm_roi_json_path = results_dir / "vlm_roi.json"
-    vlm_meta: Dict[str, Any] = {"use_vlm_roi": use_vlm_roi()}
+    vlm_enabled = use_vlm_roi_filter()
+    vlm_meta: Dict[str, Any] = {
+        "use_vlm_roi_filter": vlm_enabled,
+        "pipeline": "sam3+vlm_roi_filter" if vlm_enabled else "sam3",
+    }
 
     t0 = time.perf_counter()
-    if use_vlm_roi():
-        vlm_sam3 = run_vlm_sam3_segmentation(
+    if vlm_enabled:
+        vlm_sam3 = run_vlm_sam3_filter_pipeline(
             rgb_path,
             output_dir,
+            vlm_prompt=os.environ.get("GENPOSE2_VLM_PROMPT"),
             sam3_prompt=prompt,
             threshold=float(threshold) if threshold is not None else None,
             mask_threshold=float(mask_threshold) if mask_threshold is not None else None,
-            mask_exr_out=mask_path,
             max_instances=sam3_max_inst,
         )
         sam3_result = vlm_sam3.sam3
@@ -435,15 +438,15 @@ def _run_foundationpose_pipeline(
             {
                 "vlm_used": vlm_sam3.vlm_used,
                 "vlm_bbox": list(vlm_sam3.vlm_bbox) if vlm_sam3.vlm_bbox else None,
+                "vlm_bbox_used": list(vlm_sam3.vlm_bbox_used) if vlm_sam3.vlm_bbox_used else None,
                 "vlm_label": vlm_sam3.vlm_label,
-                "vlm_fallback": vlm_sam3.vlm_fallback,
-                "vlm_fallback_reason": vlm_sam3.vlm_fallback_reason,
-                "masked_rgb_path": str(vlm_sam3.masked_rgb_path) if vlm_sam3.masked_rgb_path else None,
-                "seg_backend": seg_backend(),
+                "kept_instance_ids": vlm_sam3.kept_instance_ids,
+                "source_instance_indices": vlm_sam3.source_instance_indices,
+                "intersection_pixels": {str(k): int(v) for k, v in vlm_sam3.intersection_pixels.items()},
+                "sam3_raw_num_instances": vlm_sam3.raw_sam3.num_instances,
             }
         )
     else:
-        vlm_meta["seg_backend"] = seg_backend()
         sam3_result = run_sam3_segmentation(
             rgb_path,
             output_dir,
@@ -468,7 +471,8 @@ def _run_foundationpose_pipeline(
         detection_ism_path.write_text(sam6d_ism.read_text(encoding="utf-8"), encoding="utf-8")
 
     if sam3_result.vis_ism_path and sam3_result.vis_ism_path.is_file():
-        vis_ism_path.write_bytes(sam3_result.vis_ism_path.read_bytes())
+        if sam3_result.vis_ism_path.resolve() != vis_ism_path.resolve():
+            vis_ism_path.write_bytes(sam3_result.vis_ism_path.read_bytes())
     elif sam3_result.instance_dets:
         visualize_sam3_ism(
             rgb_path,
@@ -594,7 +598,7 @@ def _run_foundationpose_pipeline(
     best = detections[0]
     timing["pipeline_s"] = (
         float(timing.get("vlm_s", 0.0))
-        + float(timing.get("vlm_mask_s", 0.0))
+        + float(timing.get("instance_filter_s", 0.0))
         + float(timing.get("seg_s", timing.get("sam3_s", 0.0)))
         + float(timing.get("pose_s", 0.0))
         + float(timing.get("vis_s", 0.0))
@@ -603,6 +607,7 @@ def _run_foundationpose_pipeline(
     payload: Dict[str, Any] = {
         "num_instances": len(detections),
         "seg_num_instances": sam3_result.num_instances,
+        "seg_num_instances_raw": int(vlm_meta.get("sam3_raw_num_instances", sam3_result.num_instances)),
         "seg_score_min": seg_min,
         "pose_reproj_max_px": reproj_max_px,
         "skipped_low_seg": skipped_low_seg,
@@ -691,8 +696,9 @@ def health() -> Dict[str, Any]:
         "sam3_infer_script_default": DEFAULT_SAM3_INFER_SCRIPT,
         "sam3_prompt": os.environ.get("GENPOSE2_SAM3_PROMPT")
         or os.environ.get("SAM6D_SAM3_PROMPT", DEFAULT_SAM3_PROMPT),
-        "use_vlm_roi": use_vlm_roi(),
-        "seg_backend": seg_backend(),
+        "use_vlm_roi_filter": use_vlm_roi_filter(),
+        "use_vlm_roi": use_vlm_roi_filter(),
+        "seg_backend": "sam3",
     }
 
 

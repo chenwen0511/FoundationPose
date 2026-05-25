@@ -68,7 +68,17 @@ def main() -> int:
     result_dir = payload.get("result_dir")
     if result_dir:
         print(f"\nresults: {result_dir}/results/")
-        for name in ("vis_ism.png", "vis_sam3_seg.png", "vis_pose.png", "detection_pose.json"):
+        for name in (
+            "vlm_roi.json",
+            "detection_ism.json",
+            "detection_ism_raw.json",
+            "detection_ism_filtered.json",
+            "vis_ism.png",
+            "vis_ism_raw.png",
+            "vis_sam3_seg.png",
+            "vis_pose.png",
+            "detection_pose.json",
+        ):
             p = Path(result_dir) / "results" / name
             if p.is_file():
                 print(f"  {p}")

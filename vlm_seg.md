@@ -5,7 +5,7 @@
 - `rgb` 原图一路送入 `SAM3`，直接得到 `instance masks`
 - `rgb` 原图另一路送入 `VLM`，得到目标 `ROI`
 - 用 `ROI` 对 `SAM3` 的实例结果做筛选
-- **只有与 ROI 有交集的 instance** 才继续送入 `FoundationPose`
+- **只保留与 ROI 交集最大的 instance** 才继续送入 `FoundationPose`
 
 这份文档用于指导 `seg/vlm_seg.py` 与 `http_server.py` 的集成实现。
 
@@ -33,8 +33,8 @@ rgb.png ──► sam3/scripts/infer.py ──► detection_ism.json ──► F
 
 1. **SAM3 分支：** 直接在原始 `rgb` 上做实例分割；
 2. **VLM 分支：** 在同一张原始 `rgb` 上做语义定位，输出单个目标 `ROI`；
-3. **筛选阶段：** 用 `ROI` 判断每个 SAM3 instance 是否与目标区域有交集；
-4. **位姿阶段：** 仅把保留下来的 instance 输出到 `FoundationPose`。
+3. **筛选阶段：** 用 `ROI` 计算每个 SAM3 instance 的交集像素数，并选出交集最大的那个；
+4. **位姿阶段：** 仅把这个被选中的 instance 输出到 `FoundationPose`。
 
 ```
 ┌─────────────┐        ┌──────────────────┐
@@ -57,7 +57,7 @@ rgb.png ──► sam3/scripts/infer.py ──► detection_ism.json ──► F
 | SAM3 输入 | `new_image`（ROI 外置白） | **原始 `rgb.png`** |
 | VLM 的作用 | 先生成 ROI，再改图像内容 | **只生成 ROI，用于实例筛选** |
 | 中间产物 | `rgb_vlm_masked.png` | **取消** |
-| FoundationPose 输入 mask | SAM3 在白底图上的结果 | **SAM3 原图结果中，与 ROI 相交的实例** |
+| FoundationPose 输入 mask | SAM3 在白底图上的结果 | **SAM3 原图结果中，与 ROI 交集最大的实例** |
 
 ---
 
@@ -135,7 +135,7 @@ def detect_vlm_roi(
 - 一张原图上的 `SAM3` 实例分割结果；
 - 同一张原图上的 `VLM ROI`；
 
-需要保留所有 **与 ROI 有交集** 的 instance，并丢弃其它 instance。
+需要从所有 SAM3 instance 中选出 **与 ROI 交集像素数最大的那个**，并丢弃其它 instance。
 
 这里的“交集”建议按 **mask 与 ROI 矩形区域的像素交集** 判断，而不是仅看 bbox 是否相交。原因是：
 
@@ -159,15 +159,10 @@ intersection_px = int(np.count_nonzero(instance_mask & roi_mask))
 
 筛选规则：
 
-- 当 `intersection_px >= 1` 时，认为该实例与 ROI 有交集，**保留**；
-- 当 `intersection_px == 0` 时，认为不属于目标区域，**丢弃**。
-
-如后续需要更严格过滤，可扩展为：
-
-- `intersection_px >= min_intersection_px`
-- 或 `intersection_px / instance_area >= min_intersection_ratio`
-
-但当前需求按照“**只要有交集就保留**”执行即可。
+- 先过滤掉 `intersection_px < min_intersection_px` 的实例；
+- 在剩余实例中，选择 `intersection_px` **最大的那个实例**；
+- 若多个实例 `intersection_px` 相同，则用 `score` 作为 tie-break；
+- 若全部实例 `intersection_px == 0`，则报错中止。
 
 #### 2.3.3 推荐实现
 
@@ -187,7 +182,7 @@ def filter_instances_by_roi_intersection(
 ) -> FilteredInstancesResult:
     """
     解码 detection_ism.json 中每个 instance mask，
-    仅保留与 roi_bbox 对应矩形区域有像素交集的实例。
+    仅保留与 roi_bbox 对应矩形区域交集最大的实例。
     """
     ...
 ```
@@ -195,7 +190,7 @@ def filter_instances_by_roi_intersection(
 推荐输出：
 
 - `results/detection_ism_raw.json`：SAM3 原始结果的拷贝；
-- `results/detection_ism_filtered.json`：仅保留与 ROI 相交实例的结果；
+- `results/detection_ism_filtered.json`：仅保留与 ROI 交集最大的实例结果；
 - `results/vlm_roi.json`：记录 ROI、本次保留的实例索引、交集像素数；
 - `results/vis_filtered_ism.png`：可选，可视化筛选后实例叠加到原图。
 
@@ -205,7 +200,7 @@ def filter_instances_by_roi_intersection(
 - **SAM3：** 负责“产出候选实例”；
 - **ROI 筛选：** 负责“从候选实例中留下目标区域内的实例”。
 
-也就是说，本方案不是让 VLM 直接替代 SAM3 分割，而是让 VLM 只承担 **目标选择** 的角色。
+也就是说，本方案不是让 VLM 直接替代 SAM3 分割，而是让 VLM 只承担 **目标选择** 的角色，并在多个 SAM3 候选中选出最匹配 ROI 的那个实例。
 
 ### 2.4 步骤 ④ — FoundationPose 位姿估计
 
@@ -354,14 +349,14 @@ else:
 | `GENPOSE2_VLM_MODEL` | served model name | `qwen3-vl-4b` |
 | `GENPOSE2_VLM_PROMPT` | 覆盖 `VLM.py` 内 prompt | 文件内默认 |
 | `GENPOSE2_VLM_ROI_MARGIN_PX` | VLM bbox 四向扩边像素 | `10` |
-| `GENPOSE2_VLM_MIN_INTERSECTION_PX` | 实例与 ROI 的最小交集像素数 | `1` |
+| `GENPOSE2_VLM_MIN_INTERSECTION_PX` | 实例参与“最大交集”比较前的最小交集像素数 | `1` |
 | `GENPOSE2_SAM3_PROMPT` | SAM3 文本提示 | `Plastic Reel` |
 | `GENPOSE2_SAM3_MAX_INSTANCES` | SAM3 最多实例数 | `0`（不限制） |
 
 说明：
 
 - 新方案下，`GENPOSE2_SAM3_MAX_INSTANCES` **不建议再因为 VLM 而强制设为 `1`**；
-- 因为目标选择由 ROI 交集筛选完成，SAM3 可以先尽量保留候选实例，再由后处理过滤。
+- 因为目标选择由 ROI 交集大小决定，SAM3 可以先尽量保留候选实例，再由后处理选出最佳实例。
 
 ---
 
@@ -378,7 +373,7 @@ results/
   vlm_roi.json                   # VLM ROI 元数据 + 交集统计
   vlm_roi_vis.png                # 原图 + ROI 框（可选）
   detection_ism_raw.json         # SAM3 原始实例结果
-  detection_ism_filtered.json    # 仅保留与 ROI 相交的实例
+  detection_ism_filtered.json    # 仅保留与 ROI 交集最大的实例
   vis_ism_raw.png                # 原始 SAM3 可视化（可选）
   vis_filtered_ism.png           # 筛选后实例可视化（可选）
   detection_pose.json
@@ -451,7 +446,7 @@ sam6d_results/
 
 - VLM 在多托盘图上稳定输出 1 个 bbox；
 - SAM3 在原图上可输出多个候选实例；
-- `detection_ism_filtered.json` 中只保留与 ROI 相交的实例；
+- `detection_ism_filtered.json` 中只保留与 ROI 交集最大的实例；
 - FoundationPose 输出的 3D 框投影到原图后，与目标托盘对齐；
 - 关闭 `GENPOSE2_USE_VLM_ROI_FILTER=0` 时，行为与改动前一致。
 
@@ -477,7 +472,7 @@ flowchart TD
     A --> C[VLM ROI on original rgb]
     B --> D[raw detection_ism]
     C --> E[roi bbox]
-    D --> F[filter instances by ROI intersection]
+    D --> F[pick max-overlap instance by ROI]
     E --> F
     F --> G[filtered detection_ism]
     G --> H[FoundationPose register]
@@ -492,10 +487,10 @@ flowchart TD
 1. **不再生成白底图。** 任何 `new_image`、`rgb_vlm_masked.png`、ROI 外置白逻辑都应移除。
 2. **SAM3 必须继续读原图。** 不允许因为 VLM ROI 而改 SAM3 输入坐标系。
 3. **不要修改 depth。** 位姿阶段仍使用原始深度与原始相机内参。
-4. **ROI 只用于筛选，不用于裁剪。** 当前需求是“有交集就保留”，不是“只在 ROI 内重新分割”。
-5. **交集判断优先基于 mask。** 若仅看 bbox，容易保留误检实例。
+4. **ROI 只用于筛选，不用于裁剪。** 当前需求是“取交集最大的实例”，不是“只在 ROI 内重新分割”。
+5. **交集判断优先基于 mask。** 若仅看 bbox，容易选错实例。
 6. **VLM temperature** 建议降到 `0.0–0.3`，减少 bbox 抖动。
-7. **多实例是允许的。** 只要与 ROI 有交集，就都可以继续送入 `FoundationPose`；如业务需要单实例，可在后续规则中再做收敛。
+7. **最终只输出 1 个实例。** 即 ROI 交集最大的那个；如业务将来需要多实例，再单独扩展筛选规则。
 
 ---
 

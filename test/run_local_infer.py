@@ -26,7 +26,7 @@ def main() -> int:
     parser.add_argument(
         "--no-vlm",
         action="store_true",
-        help="disable VLM ROI (GENPOSE2_USE_VLM_ROI=0)",
+        help="disable VLM ROI filter (GENPOSE2_USE_VLM_ROI_FILTER=0)",
     )
     parser.add_argument("--output-root", type=Path, default=ROOT / "service_outputs")
     args = parser.parse_args()
@@ -52,12 +52,14 @@ def main() -> int:
     os.environ["FOUNDATIONPOSE_MESH_SCALE"] = str(args.mesh_scale)
     os.environ["GENPOSE2_SAM3_PROMPT"] = args.sam3_prompt
     if args.no_vlm:
+        os.environ["GENPOSE2_USE_VLM_ROI_FILTER"] = "0"
         os.environ["GENPOSE2_USE_VLM_ROI"] = "0"
     else:
+        os.environ.setdefault("GENPOSE2_USE_VLM_ROI_FILTER", "1")
         os.environ.setdefault("GENPOSE2_USE_VLM_ROI", "1")
 
     from seg.sam3_seg import _sam3_infer_script, _sam3_python, _validate_sam3_toolchain
-    from seg.vlm_seg import seg_backend, use_vlm_roi
+    from seg.vlm_seg import use_vlm_roi_filter
 
     py = _sam3_python()
     script = _sam3_infer_script()
@@ -82,7 +84,7 @@ def main() -> int:
 
     print(
         f"mesh={mesh_path} scale={args.mesh_scale} "
-        f"sam3_prompt={args.sam3_prompt!r} use_vlm_roi={use_vlm_roi()} seg_backend={seg_backend()}"
+        f"sam3_prompt={args.sam3_prompt!r} use_vlm_roi_filter={use_vlm_roi_filter()}"
     )
     _load_foundationpose_models(mesh_path)
 
@@ -99,7 +101,11 @@ def main() -> int:
     for name in (
         "vlm_roi.json",
         "vlm_roi_vis.png",
+        "detection_ism.json",
+        "detection_ism_raw.json",
+        "detection_ism_filtered.json",
         "vis_ism.png",
+        "vis_ism_raw.png",
         "vis_sam3_seg.png",
         "vis_pose.png",
         "detection_pose.json",
@@ -107,9 +113,6 @@ def main() -> int:
         p = results_dir / name
         if p.is_file():
             print(f"  {p}")
-    masked = output_dir / "inputs" / "rgb_vlm_masked.png"
-    if masked.is_file():
-        print(f"  {masked}")
     return 0
 
 
