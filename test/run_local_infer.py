@@ -14,6 +14,7 @@ DEFAULT_SAMPLE = ROOT / "test/20260507_105248_1d1db1bb/inputs"
 DEFAULT_MESH = ROOT / "test/CAD/tray_180mm_centered_mesh_v2.ply"
 DEFAULT_MESH_SCALE = 0.001
 DEFAULT_SAM3_PROMPT = "Plastic Reel"
+DEFAULT_SAM3_ROOT = ROOT.parent / "sam3" if (ROOT.parent / "sam3").is_dir() else Path("/home/ubuntu/stephen/01-code/sam3")
 
 
 def main() -> int:
@@ -22,6 +23,11 @@ def main() -> int:
     parser.add_argument("--mesh-file", type=Path, default=DEFAULT_MESH)
     parser.add_argument("--mesh-scale", type=float, default=DEFAULT_MESH_SCALE)
     parser.add_argument("--sam3-prompt", default=DEFAULT_SAM3_PROMPT)
+    parser.add_argument(
+        "--no-vlm",
+        action="store_true",
+        help="disable VLM ROI (GENPOSE2_USE_VLM_ROI=0)",
+    )
     parser.add_argument("--output-root", type=Path, default=ROOT / "service_outputs")
     args = parser.parse_args()
 
@@ -41,9 +47,26 @@ def main() -> int:
 
     import os
 
+    os.environ.setdefault("GENPOSE2_SAM3_ROOT", str(DEFAULT_SAM3_ROOT.resolve()))
     os.environ["FOUNDATIONPOSE_MESH_FILE"] = str(mesh_path)
     os.environ["FOUNDATIONPOSE_MESH_SCALE"] = str(args.mesh_scale)
     os.environ["GENPOSE2_SAM3_PROMPT"] = args.sam3_prompt
+    if args.no_vlm:
+        os.environ["GENPOSE2_USE_VLM_ROI"] = "0"
+    else:
+        os.environ.setdefault("GENPOSE2_USE_VLM_ROI", "1")
+
+    from seg.sam3_seg import _sam3_infer_script, _sam3_python, _validate_sam3_toolchain
+    from seg.vlm_seg import seg_backend, use_vlm_roi
+
+    py = _sam3_python()
+    script = _sam3_infer_script()
+    try:
+        _validate_sam3_toolchain(py, script)
+        print(f"SAM3 toolchain: ok python={py} infer={script}")
+    except FileNotFoundError as exc:
+        print(f"SAM3 toolchain missing: {exc}", file=sys.stderr)
+        return 1
 
     from http_server import _load_foundationpose_models, _run_foundationpose_pipeline
 
@@ -57,7 +80,10 @@ def main() -> int:
         if not dst.exists():
             dst.write_bytes(src.read_bytes())
 
-    print(f"mesh={mesh_path} scale={args.mesh_scale} prompt={args.sam3_prompt!r}")
+    print(
+        f"mesh={mesh_path} scale={args.mesh_scale} "
+        f"sam3_prompt={args.sam3_prompt!r} use_vlm_roi={use_vlm_roi()} seg_backend={seg_backend()}"
+    )
     _load_foundationpose_models(mesh_path)
 
     print(f"running pipeline -> {output_dir}")
@@ -68,7 +94,22 @@ def main() -> int:
         output_dir,
     )
     print(json.dumps(payload, indent=2, ensure_ascii=False))
-    print(f"\nvisualizations under: {output_dir / 'results'}")
+    results_dir = output_dir / "results"
+    print(f"\nvisualizations under: {results_dir}")
+    for name in (
+        "vlm_roi.json",
+        "vlm_roi_vis.png",
+        "vis_ism.png",
+        "vis_sam3_seg.png",
+        "vis_pose.png",
+        "detection_pose.json",
+    ):
+        p = results_dir / name
+        if p.is_file():
+            print(f"  {p}")
+    masked = output_dir / "inputs" / "rgb_vlm_masked.png"
+    if masked.is_file():
+        print(f"  {masked}")
     return 0
 
 

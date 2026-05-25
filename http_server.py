@@ -1,7 +1,7 @@
 """
 FoundationPose HTTP 服务：/infer 接收 rgb、depth、camera 三个 multipart 文件。
 
-流程：SAM3 文本分割（``sam3_seg.py``）→ 对每个实例调用 FoundationPose ``register()`` → 可视化。
+流程：可选 VLM ROI + 白底图（``seg/vlm_seg.py``）→ YOLO/SAM3 实例分割 → FoundationPose ``register()`` → 可视化。
 
 启动示例（白盘测试样例）::
 
@@ -38,7 +38,7 @@ os.environ.setdefault("OPENCV_IO_ENABLE_OPENEXR", "1")
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 
-from sam3_seg import (
+from seg.sam3_seg import (
     DEFAULT_SAM3_INFER_SCRIPT,
     DEFAULT_SAM3_PROMPT,
     DEFAULT_SAM3_PYTHON,
@@ -52,6 +52,7 @@ from sam3_seg import (
     visualize_sam3_ism,
     visualize_sam3_mask_exr,
 )
+from seg.vlm_seg import run_vlm_sam3_segmentation, seg_backend, use_vlm_roi
 
 DEFAULT_OUTPUT_ROOT = ROOT_DIR / "service_outputs"
 DEFAULT_MESH_FILE = ROOT_DIR / "test/CAD/tray_180mm_centered_mesh_v2.ply"
@@ -83,7 +84,11 @@ _fp_holder: Dict[str, Any] = {
 
 
 class InferTiming(TypedDict, total=False):
+    vlm_s: float
+    vlm_mask_s: float
+    seg_s: float
     sam3_s: float
+    yolo_s: float
     pose_s: float
     vis_s: float
     pipeline_s: float
@@ -410,17 +415,46 @@ def _run_foundationpose_pipeline(
         "SAM6D_SAM3_MASK_THRESHOLD"
     )
 
+    vlm_roi_json_path = results_dir / "vlm_roi.json"
+    vlm_meta: Dict[str, Any] = {"use_vlm_roi": use_vlm_roi()}
+
     t0 = time.perf_counter()
-    sam3_result: Sam3SegmentationResult = run_sam3_segmentation(
-        rgb_path,
-        output_dir,
-        prompt=prompt,
-        threshold=float(threshold) if threshold is not None else None,
-        mask_threshold=float(mask_threshold) if mask_threshold is not None else None,
-        mask_exr_out=mask_path,
-        max_instances=sam3_max_inst,
-    )
-    timing["sam3_s"] = time.perf_counter() - t0
+    if use_vlm_roi():
+        vlm_sam3 = run_vlm_sam3_segmentation(
+            rgb_path,
+            output_dir,
+            sam3_prompt=prompt,
+            threshold=float(threshold) if threshold is not None else None,
+            mask_threshold=float(mask_threshold) if mask_threshold is not None else None,
+            mask_exr_out=mask_path,
+            max_instances=sam3_max_inst,
+        )
+        sam3_result = vlm_sam3.sam3
+        timing.update(vlm_sam3.timing)
+        vlm_meta.update(
+            {
+                "vlm_used": vlm_sam3.vlm_used,
+                "vlm_bbox": list(vlm_sam3.vlm_bbox) if vlm_sam3.vlm_bbox else None,
+                "vlm_label": vlm_sam3.vlm_label,
+                "vlm_fallback": vlm_sam3.vlm_fallback,
+                "vlm_fallback_reason": vlm_sam3.vlm_fallback_reason,
+                "masked_rgb_path": str(vlm_sam3.masked_rgb_path) if vlm_sam3.masked_rgb_path else None,
+                "seg_backend": seg_backend(),
+            }
+        )
+    else:
+        vlm_meta["seg_backend"] = seg_backend()
+        sam3_result = run_sam3_segmentation(
+            rgb_path,
+            output_dir,
+            prompt=prompt,
+            threshold=float(threshold) if threshold is not None else None,
+            mask_threshold=float(mask_threshold) if mask_threshold is not None else None,
+            mask_exr_out=mask_path,
+            max_instances=sam3_max_inst,
+        )
+        timing["seg_s"] = time.perf_counter() - t0
+        timing["sam3_s"] = timing["seg_s"]
 
     if detection_ism_path.is_file():
         pass
@@ -558,8 +592,12 @@ def _run_foundationpose_pipeline(
     detection_pose_path.write_text(json.dumps(detections, indent=2), encoding="utf-8")
 
     best = detections[0]
-    timing["pipeline_s"] = float(timing.get("sam3_s", 0.0)) + float(timing.get("pose_s", 0.0)) + float(
-        timing.get("vis_s", 0.0)
+    timing["pipeline_s"] = (
+        float(timing.get("vlm_s", 0.0))
+        + float(timing.get("vlm_mask_s", 0.0))
+        + float(timing.get("seg_s", timing.get("sam3_s", 0.0)))
+        + float(timing.get("pose_s", 0.0))
+        + float(timing.get("vis_s", 0.0))
     )
 
     payload: Dict[str, Any] = {
@@ -584,6 +622,8 @@ def _run_foundationpose_pipeline(
         "vis_ism_path": str(vis_ism_path),
         "vis_pose_path": str(vis_pose_path),
         "vis_sam3_seg_path": str(vis_sam3_seg_path) if vis_sam3_seg_path.is_file() else None,
+        "vlm_roi_json_path": str(vlm_roi_json_path) if vlm_roi_json_path.is_file() else None,
+        "vlm": vlm_meta,
         "detections": detections,
         "timing": timing,
         "sam3_prompt": prompt or os.environ.get("GENPOSE2_SAM3_PROMPT", DEFAULT_SAM3_PROMPT),
@@ -606,7 +646,7 @@ async def _startup_load_models() -> None:
         print(f"[http_server] SAM3 toolchain missing: {exc}")
 
     try:
-        from sam3_seg import _cocomask
+        from seg.sam3_seg import _cocomask
 
         _cocomask()
         print("[http_server] SAM3 dependency pycocotools: ok")
@@ -651,6 +691,8 @@ def health() -> Dict[str, Any]:
         "sam3_infer_script_default": DEFAULT_SAM3_INFER_SCRIPT,
         "sam3_prompt": os.environ.get("GENPOSE2_SAM3_PROMPT")
         or os.environ.get("SAM6D_SAM3_PROMPT", DEFAULT_SAM3_PROMPT),
+        "use_vlm_roi": use_vlm_roi(),
+        "seg_backend": seg_backend(),
     }
 
 

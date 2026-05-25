@@ -72,6 +72,8 @@ DEFAULT_SAM3_PROMPT = "Plastic Reel"
 DEFAULT_SAM3_THRESHOLD = 0.41
 DEFAULT_SAM3_MASK_THRESHOLD = 0.50
 DEFAULT_SAM3_CHECKPOINT = "/home/ubuntu/stephen/02-weight/sam3/sam3.pt"
+# VLM→分割：``vlm_seg`` 生成 new_image 前将 VLM bbox 四向扩边；实例分割默认 yolo（``GENPOSE2_SEG_BACKEND``）
+DEFAULT_VLM_ROI_MARGIN_PX = 10
 
 
 def _env_first(*keys: str, default: str = "") -> str:
