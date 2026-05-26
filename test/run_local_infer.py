@@ -14,7 +14,7 @@ DEFAULT_SAMPLE = ROOT / "test/20260507_105248_1d1db1bb/inputs"
 DEFAULT_MESH = ROOT / "test/CAD/tray_180mm_centered_mesh_v2.ply"
 DEFAULT_MESH_SCALE = 0.001
 DEFAULT_SAM3_PROMPT = "Plastic Reel"
-DEFAULT_SAM3_ROOT = ROOT.parent / "sam3" if (ROOT.parent / "sam3").is_dir() else Path("/home/ubuntu/stephen/01-code/sam3")
+DEFAULT_SAM3_API_URL = "http://127.0.0.1:18002/infer"
 
 
 def main() -> int:
@@ -47,7 +47,7 @@ def main() -> int:
 
     import os
 
-    os.environ.setdefault("GENPOSE2_SAM3_ROOT", str(DEFAULT_SAM3_ROOT.resolve()))
+    os.environ.setdefault("GENPOSE2_SAM3_API_URL", DEFAULT_SAM3_API_URL)
     os.environ["FOUNDATIONPOSE_MESH_FILE"] = str(mesh_path)
     os.environ["FOUNDATIONPOSE_MESH_SCALE"] = str(args.mesh_scale)
     os.environ["GENPOSE2_SAM3_PROMPT"] = args.sam3_prompt
@@ -58,16 +58,14 @@ def main() -> int:
         os.environ.setdefault("GENPOSE2_USE_VLM_ROI_FILTER", "1")
         os.environ.setdefault("GENPOSE2_USE_VLM_ROI", "1")
 
-    from seg.sam3_seg import _sam3_infer_script, _sam3_python, _validate_sam3_toolchain
+    from seg.sam3_seg import _sam3_api_url, _validate_sam3_service_config
     from seg.vlm_seg import use_vlm_roi_filter
 
-    py = _sam3_python()
-    script = _sam3_infer_script()
     try:
-        _validate_sam3_toolchain(py, script)
-        print(f"SAM3 toolchain: ok python={py} infer={script}")
-    except FileNotFoundError as exc:
-        print(f"SAM3 toolchain missing: {exc}", file=sys.stderr)
+        _validate_sam3_service_config(_sam3_api_url())
+        print(f"SAM3 service config: ok api_url={_sam3_api_url()}")
+    except ValueError as exc:
+        print(f"SAM3 service config invalid: {exc}", file=sys.stderr)
         return 1
 
     from http_server import _load_foundationpose_models, _run_foundationpose_pipeline

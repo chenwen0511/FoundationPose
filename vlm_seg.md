@@ -18,7 +18,7 @@
 当前 `http_server.py` 直接对全图调用 SAM3 文本提示（如 `"Plastic Reel"`）：
 
 ```
-rgb.png ──► sam3/scripts/infer.py ──► detection_ism.json ──► FoundationPose.register()
+rgb.png ──► SAM3 HTTP /infer ──► detection_ism.json ──► FoundationPose.register()
 ```
 
 在多托盘、多相似白色料盘场景下，SAM3 往往会：
@@ -77,8 +77,8 @@ rgb.png ──► sam3/scripts/infer.py ──► detection_ism.json ──► F
 这一步与当前流程保持一致，包括但不限于：
 
 - 仍调用 `seg/sam3_seg.py` 中的 `run_sam3_segmentation(...)`；
-- 仍子进程执行 `sam3/scripts/infer.py`；
-- 仍使用同样的 `--prompt`、`--threshold`、`--mask-threshold`、`--checkpoint` 等参数；
+- 仍通过在线 SAM3 `/infer` 接口执行分割；
+- 仍使用同样的 `prompt`、`threshold`、`mask_threshold` 等参数；
 - 仍输出 `sam6d_results/detection_ism.json`、`vis_ism.png`、`mask_instances.png` 等。
 
 **结论：** SAM3 侧逻辑不改，输入图也不改，保留现有全图实例分割能力。
@@ -460,7 +460,7 @@ sam6d_results/
 | `seg/sam3_seg.py` | 步骤 ① 子进程封装 |
 | `seg/vlm_seg.py` | **待实现**，串联 VLM ROI 与实例筛选 |
 | `http_server.py` | 步骤 ④ 总编排与 FoundationPose 调用 |
-| `sam3/scripts/infer.py` | SAM3 推理后端 |
+| 在线 SAM3 `/infer` 接口 | SAM3 推理后端 |
 
 ---
 

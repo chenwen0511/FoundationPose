@@ -22,7 +22,7 @@ test/
 | 项 | 值 |
 |----|-----|
 | VLM+分割 | `seg/vlm_seg.py`（原图 `SAM3 -> instances` + 原图 `VLM -> ROI` + 选取 ROI 交集最大的实例） |
-| SAM3 封装 | `seg/sam3_seg.py`（子进程调用 `sam3/scripts/infer.py`） |
+| SAM3 封装 | `seg/sam3_seg.py`（REST 调用在线 SAM3 `/infer` 接口） |
 | CAD | `test/CAD/tray_180mm_centered_mesh_v2.ply` |
 | CAD 缩放 | `FOUNDATIONPOSE_MESH_SCALE=0.001`（mm → m） |
 | SAM3 提示词 | `"Plastic Reel"` |
@@ -42,7 +42,7 @@ python http_server.py --host 0.0.0.0 --port 8002
 export FOUNDATIONPOSE_MESH_FILE=test/CAD/tray_180mm_centered_mesh_v2.ply
 export FOUNDATIONPOSE_MESH_SCALE=0.001
 export GENPOSE2_SAM3_PROMPT="Plastic Reel"
-export GENPOSE2_SAM3_ROOT=/home/ubuntu/stephen/01-code/sam3
+export GENPOSE2_SAM3_API_URL=http://127.0.0.1:18002/infer
 export GENPOSE2_VLM_API_URL=http://192.168.100.92:8000/v1/chat/completions
 export GENPOSE2_USE_VLM_ROI_FILTER=1
 export GENPOSE2_VLM_ROI_MARGIN_PX=10

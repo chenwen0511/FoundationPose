@@ -8,7 +8,7 @@ FoundationPose HTTP 服务：/infer 接收 rgb、depth、camera 三个 multipart
     export FOUNDATIONPOSE_MESH_FILE=test/CAD/tray_180mm_centered_mesh_v2.ply
     export FOUNDATIONPOSE_MESH_SCALE=0.001
     export GENPOSE2_SAM3_PROMPT="Plastic Reel"
-    export GENPOSE2_SAM3_ROOT=/path/to/sam3
+    export GENPOSE2_SAM3_API_URL=http://127.0.0.1:18002/infer
     python http_server.py --host 0.0.0.0 --port 8002
 """
 
@@ -39,14 +39,13 @@ from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 
 from seg.sam3_seg import (
-    DEFAULT_SAM3_INFER_SCRIPT,
+    DEFAULT_SAM3_API_URL,
     DEFAULT_SAM3_PROMPT,
-    DEFAULT_SAM3_PYTHON,
     Sam3SegmentationResult,
-    _sam3_infer_script,
-    _sam3_python,
-    _sam3_root,
-    _validate_sam3_toolchain,
+    _sam3_api_url,
+    _sam3_health_url,
+    _validate_sam3_service_config,
+    check_sam3_service_health,
     get_instance_bool_masks,
     run_sam3_segmentation,
     visualize_sam3_ism,
@@ -638,17 +637,22 @@ def _run_foundationpose_pipeline(
 
 @app.on_event("startup")
 async def _startup_load_models() -> None:
-    py = _sam3_python()
-    script = _sam3_infer_script()
+    api_url = _sam3_api_url()
+    health_url = _sam3_health_url()
     print(
-        f"[http_server] SAM3: root={_sam3_root()} python={py} infer_script={script} "
-        f"(default infer: {DEFAULT_SAM3_INFER_SCRIPT})"
+        f"[http_server] SAM3 HTTP API={api_url} health={health_url} "
+        f"(default api: {DEFAULT_SAM3_API_URL})"
     )
     try:
-        _validate_sam3_toolchain(py, script)
-        print("[http_server] SAM3 toolchain: ok")
-    except FileNotFoundError as exc:
-        print(f"[http_server] SAM3 toolchain missing: {exc}")
+        _validate_sam3_service_config(api_url)
+        print("[http_server] SAM3 service config: ok")
+    except ValueError as exc:
+        print(f"[http_server] SAM3 service config invalid: {exc}")
+    try:
+        sam3_health = check_sam3_service_health()
+        print(f"[http_server] SAM3 health check: {json.dumps(sam3_health, ensure_ascii=False)}")
+    except Exception as exc:
+        print(f"[http_server] SAM3 health check failed: {type(exc).__name__}: {exc}")
 
     try:
         from seg.sam3_seg import _cocomask
@@ -677,6 +681,7 @@ def health() -> Dict[str, Any]:
         mesh_resolved = str(_resolve_repo_path(mesh_cfg))
         mesh_exists = Path(mesh_resolved).is_file()
 
+    sam3_health = check_sam3_service_health()
     return {
         "status": "ok",
         "root_dir": str(ROOT_DIR),
@@ -689,11 +694,11 @@ def health() -> Dict[str, Any]:
         "seg_score_min": _seg_score_min(),
         "pose_reproj_max_px": _pose_reproj_max_px(),
         "est_refine_iter": _est_refine_iter(),
-        "sam3_root": str(_sam3_root()),
-        "sam3_python": _sam3_python(),
-        "sam3_python_default": DEFAULT_SAM3_PYTHON,
-        "sam3_infer_script": str(_sam3_infer_script()),
-        "sam3_infer_script_default": DEFAULT_SAM3_INFER_SCRIPT,
+        "sam3_api_url": _sam3_api_url(),
+        "sam3_health_url": _sam3_health_url(),
+        "sam3_api_url_default": DEFAULT_SAM3_API_URL,
+        "sam3_service_ok": bool(sam3_health.get("ok")),
+        "sam3_service_health": sam3_health,
         "sam3_prompt": os.environ.get("GENPOSE2_SAM3_PROMPT")
         or os.environ.get("SAM6D_SAM3_PROMPT", DEFAULT_SAM3_PROMPT),
         "use_vlm_roi_filter": use_vlm_roi_filter(),
