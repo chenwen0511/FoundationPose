@@ -7,7 +7,6 @@ FoundationPose HTTP 服务：/infer 接收 rgb、depth、camera 三个 multipart
 
     export FOUNDATIONPOSE_MESH_FILE=test/CAD/tray_180mm_centered_mesh_v2.ply
     export FOUNDATIONPOSE_MESH_SCALE=0.001
-    export GENPOSE2_SAM3_PROMPT="Plastic Reel"
     export GENPOSE2_SAM3_API_URL=http://127.0.0.1:18002/infer
     python http_server.py --host 0.0.0.0 --port 8002
 """
@@ -40,7 +39,9 @@ from fastapi.responses import JSONResponse
 
 from seg.sam3_seg import (
     DEFAULT_SAM3_API_URL,
+    DEFAULT_SAM3_MASK_THRESHOLD,
     DEFAULT_SAM3_PROMPT,
+    DEFAULT_SAM3_THRESHOLD,
     Sam3SegmentationResult,
     _sam3_api_url,
     _sam3_health_url,
@@ -55,7 +56,7 @@ from seg.vlm_seg import run_vlm_sam3_filter_pipeline, use_vlm_roi_filter
 
 DEFAULT_OUTPUT_ROOT = ROOT_DIR / "service_outputs"
 DEFAULT_MESH_FILE = ROOT_DIR / "test/CAD/tray_180mm_centered_mesh_v2.ply"
-DEFAULT_SAM3_PROMPT = "Plastic Reel"
+DEFAULT_SAM3_PROMPT = "Plastic Reel Conncted With Tape"
 DEFAULT_MESH_SCALE = 0.001
 DEFAULT_SEG_SCORE_MIN = 0.6
 DEFAULT_POSE_REPROJ_MAX_PX = 40.0
@@ -132,6 +133,10 @@ def _seg_score_min() -> float:
 def _pose_reproj_max_px() -> float:
     """位姿平移重投影与 mask 中心的最大允许偏差（像素）。"""
     return float(os.environ.get("FOUNDATIONPOSE_POSE_REPROJ_MAX_PX", str(DEFAULT_POSE_REPROJ_MAX_PX)))
+
+
+def _sam3_prompt_value() -> str:
+    return str(getattr(app.state, "sam3_prompt", DEFAULT_SAM3_PROMPT))
 
 
 async def _save_upload(upload: UploadFile, path: Path) -> None:
@@ -407,11 +412,9 @@ def _run_foundationpose_pipeline(
     vis_sam3_seg_path = results_dir / "vis_sam3_seg.png"
 
     sam3_max_inst = int(os.environ.get("GENPOSE2_SAM3_MAX_INSTANCES", "0"))
-    prompt = os.environ.get("GENPOSE2_SAM3_PROMPT") or os.environ.get("SAM6D_SAM3_PROMPT")
-    threshold = os.environ.get("GENPOSE2_SAM3_THRESHOLD") or os.environ.get("SAM6D_SAM3_THRESHOLD")
-    mask_threshold = os.environ.get("GENPOSE2_SAM3_MASK_THRESHOLD") or os.environ.get(
-        "SAM6D_SAM3_MASK_THRESHOLD"
-    )
+    prompt = _sam3_prompt_value()
+    threshold = DEFAULT_SAM3_THRESHOLD
+    mask_threshold = DEFAULT_SAM3_MASK_THRESHOLD
 
     vlm_roi_json_path = results_dir / "vlm_roi.json"
     vlm_enabled = use_vlm_roi_filter()
@@ -427,8 +430,8 @@ def _run_foundationpose_pipeline(
             output_dir,
             vlm_prompt=os.environ.get("GENPOSE2_VLM_PROMPT"),
             sam3_prompt=prompt,
-            threshold=float(threshold) if threshold is not None else None,
-            mask_threshold=float(mask_threshold) if mask_threshold is not None else None,
+            threshold=threshold,
+            mask_threshold=mask_threshold,
             max_instances=sam3_max_inst,
         )
         sam3_result = vlm_sam3.sam3
@@ -450,8 +453,8 @@ def _run_foundationpose_pipeline(
             rgb_path,
             output_dir,
             prompt=prompt,
-            threshold=float(threshold) if threshold is not None else None,
-            mask_threshold=float(mask_threshold) if mask_threshold is not None else None,
+            threshold=threshold,
+            mask_threshold=mask_threshold,
             mask_exr_out=mask_path,
             max_instances=sam3_max_inst,
         )
@@ -630,7 +633,7 @@ def _run_foundationpose_pipeline(
         "vlm": vlm_meta,
         "detections": detections,
         "timing": timing,
-        "sam3_prompt": prompt or os.environ.get("GENPOSE2_SAM3_PROMPT", DEFAULT_SAM3_PROMPT),
+        "sam3_prompt": prompt,
     }
     return payload
 
@@ -699,8 +702,7 @@ def health() -> Dict[str, Any]:
         "sam3_api_url_default": DEFAULT_SAM3_API_URL,
         "sam3_service_ok": bool(sam3_health.get("ok")),
         "sam3_service_health": sam3_health,
-        "sam3_prompt": os.environ.get("GENPOSE2_SAM3_PROMPT")
-        or os.environ.get("SAM6D_SAM3_PROMPT", DEFAULT_SAM3_PROMPT),
+        "sam3_prompt": _sam3_prompt_value(),
         "use_vlm_roi_filter": use_vlm_roi_filter(),
         "use_vlm_roi": use_vlm_roi_filter(),
         "seg_backend": "sam3",
@@ -770,6 +772,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="FoundationPose HTTP service (SAM3 + register)")
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", default=8002, type=int)
+    parser.add_argument("--sam3-prompt", default=DEFAULT_SAM3_PROMPT)
     parser.add_argument(
         "--mesh-file",
         default=os.environ.get("FOUNDATIONPOSE_MESH_FILE", str(DEFAULT_MESH_FILE)),
@@ -784,14 +787,12 @@ def main() -> None:
     args = parser.parse_args()
     os.environ["FOUNDATIONPOSE_MESH_FILE"] = args.mesh_file
     os.environ["FOUNDATIONPOSE_MESH_SCALE"] = str(args.mesh_scale)
-    if not os.environ.get("GENPOSE2_SAM3_PROMPT") and not os.environ.get("SAM6D_SAM3_PROMPT"):
-        os.environ["GENPOSE2_SAM3_PROMPT"] = DEFAULT_SAM3_PROMPT
-
+    app.state.sam3_prompt = str(args.sam3_prompt)
     import uvicorn
 
     print(
         f"[http_server] starting uvicorn mesh={args.mesh_file} "
-        f"mesh_scale={args.mesh_scale} sam3_prompt={os.environ.get('GENPOSE2_SAM3_PROMPT')}"
+        f"mesh_scale={args.mesh_scale} sam3_prompt={_sam3_prompt_value()}"
     )
     uvicorn.run(app, host=args.host, port=args.port)
 
