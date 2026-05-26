@@ -58,7 +58,7 @@ DEFAULT_OUTPUT_ROOT = ROOT_DIR / "service_outputs"
 DEFAULT_MESH_FILE = ROOT_DIR / "test/CAD/tray_180mm_centered_mesh_v2.ply"
 DEFAULT_SAM3_PROMPT = "Plastic Reel Conncted With Tape"
 DEFAULT_MESH_SCALE = 0.001
-DEFAULT_SEG_SCORE_MIN = 0.6
+DEFAULT_SEG_SCORE_MIN = 0.4
 DEFAULT_POSE_REPROJ_MAX_PX = 40.0
 
 _POSE_COLORS_RGB: tuple[tuple[int, int, int], ...] = (

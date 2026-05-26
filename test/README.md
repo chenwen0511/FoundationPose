@@ -91,7 +91,7 @@ python test/run_20260522_121946.py            # 等价于 bash 脚本 local 模�
     "num_instances": 1,
     "seg_num_instances": 1,
     "seg_num_instances_raw": 6,
-    "seg_score_min": 0.6,
+    "seg_score_min": 0.4,
     "pose_reproj_max_px": 40.0,
     "skipped_low_seg": [],
     "score": 0.796875,
